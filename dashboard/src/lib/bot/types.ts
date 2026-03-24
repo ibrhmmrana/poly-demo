@@ -81,6 +81,15 @@ export interface ScanSummary {
   error?: string;
 }
 
+export interface ResolveSummary {
+  checked: number;
+  resolved: number;
+  wins: number;
+  losses: number;
+  skippedOpen: number;
+  errors: number;
+}
+
 export interface BotSettings {
   mode: "paper" | "live";
   botPaused: boolean;

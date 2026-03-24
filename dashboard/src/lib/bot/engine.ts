@@ -4,7 +4,12 @@ import { getForecasts } from "./forecast";
 import { findEdges } from "./edge";
 import { sizeTrade } from "./risk";
 import { executePaper, executeLive } from "./trader";
-import type { BotSettings, ScanResult, ScanSummary } from "./types";
+import type {
+  BotSettings,
+  ResolveSummary,
+  ScanResult,
+  ScanSummary,
+} from "./types";
 
 function toNumber(raw: string | undefined, fallback: number): number {
   const n = Number(raw);
@@ -394,4 +399,128 @@ export async function runScanCycle(): Promise<ScanSummary> {
       error: message,
     };
   }
+}
+
+type PendingTradeRow = {
+  id: string;
+  token_id: string | null;
+  side: "BUY" | "SELL";
+  fill_price: number | null;
+  size_shares: number | null;
+  outcome: string;
+};
+
+type GammaMarket = {
+  closed?: boolean;
+  outcomePrices?: string;
+};
+
+function parseOutcomePrices(raw: string | undefined): [number, number] | null {
+  if (!raw) return null;
+  try {
+    const arr = JSON.parse(raw) as number[] | string[];
+    if (!Array.isArray(arr) || arr.length < 2) return null;
+    const yes = Number(arr[0]);
+    const no = Number(arr[1]);
+    if (!Number.isFinite(yes) || !Number.isFinite(no)) return null;
+    return [yes, no];
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGammaMarketByToken(tokenId: string): Promise<GammaMarket | null> {
+  try {
+    const res = await fetch(
+      `https://gamma-api.polymarket.com/markets?clob_token_ids=${encodeURIComponent(tokenId)}`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return null;
+    const rows = (await res.json()) as GammaMarket[] | unknown;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function runResolveCycle(limit = 200): Promise<ResolveSummary> {
+  const sb = getServiceSupabase();
+
+  const { data, error } = await sb
+    .from("trades")
+    .select("id, token_id, side, fill_price, size_shares, outcome")
+    .eq("outcome", "PENDING")
+    .order("created_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Failed to fetch pending trades: ${error.message}`);
+  }
+
+  const pending = (data ?? []) as PendingTradeRow[];
+
+  const summary: ResolveSummary = {
+    checked: pending.length,
+    resolved: 0,
+    wins: 0,
+    losses: 0,
+    skippedOpen: 0,
+    errors: 0,
+  };
+
+  for (const t of pending) {
+    try {
+      if (!t.token_id || t.fill_price === null || t.size_shares === null) {
+        summary.errors++;
+        continue;
+      }
+
+      const market = await fetchGammaMarketByToken(t.token_id);
+      if (!market) {
+        summary.errors++;
+        continue;
+      }
+      if (!market.closed) {
+        summary.skippedOpen++;
+        continue;
+      }
+
+      const prices = parseOutcomePrices(market.outcomePrices);
+      if (!prices) {
+        summary.errors++;
+        continue;
+      }
+      const payoutYes = prices[0];
+
+      const pnl =
+        t.side === "BUY"
+          ? (payoutYes - t.fill_price) * t.size_shares
+          : (t.fill_price - payoutYes) * t.size_shares;
+
+      const outcome = pnl >= 0 ? "WIN" : "LOSS";
+
+      const { error: updateErr } = await sb
+        .from("trades")
+        .update({
+          outcome,
+          pnl: Math.round(pnl * 100) / 100,
+          resolved_at: new Date().toISOString(),
+        })
+        .eq("id", t.id);
+
+      if (updateErr) {
+        summary.errors++;
+        continue;
+      }
+
+      summary.resolved++;
+      if (outcome === "WIN") summary.wins++;
+      else summary.losses++;
+    } catch {
+      summary.errors++;
+    }
+  }
+
+  return summary;
 }

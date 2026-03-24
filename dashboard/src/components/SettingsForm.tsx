@@ -186,6 +186,12 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
             </code>
           </div>
           <div>
+            <p className="text-[var(--dim)] mb-1">Resolver Endpoint</p>
+            <code className="text-[var(--text)] bg-[var(--bg3)] px-3 py-1.5 rounded block">
+              POST /api/bot/resolve
+            </code>
+          </div>
+          <div>
             <p className="text-[var(--dim)] mb-1">Header</p>
             <code className="text-[var(--text)] bg-[var(--bg3)] px-3 py-1.5 rounded block">
               x-api-key: {apiKeyHint}
