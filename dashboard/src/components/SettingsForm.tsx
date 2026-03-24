@@ -2,7 +2,6 @@
 
 import { useState, useTransition } from "react";
 import { updateBotSetting } from "@/app/dashboard/settings/actions";
-import BotLauncher from "@/components/BotLauncher";
 
 interface SettingsFormProps {
   initialSettings: Record<string, string>;
@@ -38,6 +37,8 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
     save("mode", "live");
     setConfirmLive(false);
   }
+
+  const apiKeyHint = process.env.NEXT_PUBLIC_BOT_API_KEY_HINT ?? "••••••";
 
   return (
     <div className="space-y-6">
@@ -99,11 +100,6 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
         </div>
       )}
 
-      {/* Start/stop process on this machine */}
-      <Section title="Run bot (this PC)">
-        <BotLauncher />
-      </Section>
-
       {/* Pause */}
       <Section title="Bot Control">
         <div className="flex items-center gap-4">
@@ -118,59 +114,42 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
             {paused ? "Resume Bot" : "Pause Bot"}
           </button>
           <span className="text-sm text-[var(--dim)]">
-            {paused ? "Bot is paused — scanning continues but no trades" : "Bot is running"}
+            {paused ? "Bot is paused — scans still run but no trades" : "Bot is active"}
           </span>
           {saved === "bot_paused" && <Saved />}
         </div>
       </Section>
 
-      {/* Threshold sliders */}
+      {/* Risk */}
       <Section title="Risk Parameters">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <ThresholdInput
-            label="Min Edge %"
-            settingKey="min_edge_pct"
-            value={settings.min_edge_pct ?? "15"}
-            min={5}
-            max={50}
-            step={1}
-            suffix="%"
-            onChange={save}
-            isSaved={saved === "min_edge_pct"}
-          />
-          <ThresholdInput
-            label="Max Position USD"
-            settingKey="max_position_usd"
-            value={settings.max_position_usd ?? "10"}
-            min={1}
-            max={100}
-            step={1}
-            suffix="$"
-            onChange={save}
-            isSaved={saved === "max_position_usd"}
-          />
-          <ThresholdInput
-            label="Kelly Fraction"
-            settingKey="kelly_fraction"
-            value={settings.kelly_fraction ?? "0.25"}
-            min={0.05}
-            max={1}
-            step={0.05}
-            suffix="x"
-            onChange={save}
-            isSaved={saved === "kelly_fraction"}
-          />
-          <ThresholdInput
-            label="Daily Loss Limit USD"
-            settingKey="daily_loss_limit_usd"
-            value={settings.daily_loss_limit_usd ?? "-20"}
-            min={-200}
-            max={0}
-            step={5}
-            suffix="$"
-            onChange={save}
-            isSaved={saved === "daily_loss_limit_usd"}
-          />
+          <ThresholdInput label="Min Edge %" settingKey="min_edge_pct" value={settings.min_edge_pct ?? "15"} min={5} max={50} step={1} suffix="%" onChange={save} isSaved={saved === "min_edge_pct"} />
+          <ThresholdInput label="Max Position USD" settingKey="max_position_usd" value={settings.max_position_usd ?? "10"} min={1} max={100} step={1} suffix="$" onChange={save} isSaved={saved === "max_position_usd"} />
+          <ThresholdInput label="Kelly Fraction" settingKey="kelly_fraction" value={settings.kelly_fraction ?? "0.25"} min={0.05} max={1} step={0.05} suffix="x" onChange={save} isSaved={saved === "kelly_fraction"} />
+          <ThresholdInput label="Daily Loss Limit USD" settingKey="daily_loss_limit_usd" value={settings.daily_loss_limit_usd ?? "-20"} min={-200} max={0} step={5} suffix="$" onChange={save} isSaved={saved === "daily_loss_limit_usd"} />
+        </div>
+      </Section>
+
+      {/* Integration */}
+      <Section title="API Integration (n8n / Cron)">
+        <div className="space-y-3 text-sm">
+          <div>
+            <p className="text-[var(--dim)] mb-1">Endpoint</p>
+            <code className="text-[var(--text)] bg-[var(--bg3)] px-3 py-1.5 rounded block">
+              POST /api/bot/run
+            </code>
+          </div>
+          <div>
+            <p className="text-[var(--dim)] mb-1">Header</p>
+            <code className="text-[var(--text)] bg-[var(--bg3)] px-3 py-1.5 rounded block">
+              x-api-key: {apiKeyHint}
+            </code>
+          </div>
+          <p className="text-xs text-[var(--dim)]">
+            Create a workflow in n8n (or any cron service) that sends a POST request
+            to the endpoint above at your desired frequency. Each call runs one full
+            scan cycle: market discovery, forecast, edge detection, and trade execution.
+          </p>
         </div>
       </Section>
 
@@ -191,28 +170,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function ThresholdInput({
-  label,
-  settingKey,
-  value,
-  min,
-  max,
-  step,
-  suffix,
-  onChange,
-  isSaved,
+  label, settingKey, value, min, max, step, suffix, onChange, isSaved,
 }: {
-  label: string;
-  settingKey: string;
-  value: string;
-  min: number;
-  max: number;
-  step: number;
-  suffix: string;
-  onChange: (key: string, value: string) => void;
-  isSaved: boolean;
+  label: string; settingKey: string; value: string;
+  min: number; max: number; step: number; suffix: string;
+  onChange: (key: string, value: string) => void; isSaved: boolean;
 }) {
   const numVal = parseFloat(value) || 0;
-
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
@@ -225,11 +189,7 @@ function ThresholdInput({
         </div>
       </div>
       <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={numVal}
+        type="range" min={min} max={max} step={step} value={numVal}
         onChange={(e) => onChange(settingKey, e.target.value)}
         className="w-full accent-[var(--blue)]"
       />
@@ -242,7 +202,5 @@ function ThresholdInput({
 }
 
 function Saved() {
-  return (
-    <span className="text-xs text-[var(--green)] ml-2 animate-pulse">saved</span>
-  );
+  return <span className="text-xs text-[var(--green)] ml-2 animate-pulse">saved</span>;
 }

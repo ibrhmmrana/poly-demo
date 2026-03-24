@@ -1,134 +1,119 @@
-import StatCard from "@/components/StatCard";
-import PnlChart from "@/components/PnlChart";
-import CityBreakdown from "@/components/CityBreakdown";
-import DailyPnlChart from "@/components/DailyPnlChart";
+import { createServerSupabase } from "@/lib/supabase-server";
+import ScanCard from "@/components/ScanCard";
+import StatusBar from "@/components/StatusBar";
 import RealtimeRefresher from "@/components/RealtimeRefresher";
-import {
-  getSummaryStats,
-  getCumulativePnl,
-  getPnlByCity,
-  getDailyHistory,
-  getOpenPositions,
-} from "@/lib/queries";
 
 export const revalidate = 0;
 
-export default async function OverviewPage() {
-  const [stats, pnlData, cityData, dailyData, positions] = await Promise.all([
-    getSummaryStats(),
-    getCumulativePnl(),
-    getPnlByCity(),
-    getDailyHistory(),
-    getOpenPositions(),
-  ]);
+export default async function ActivityPage() {
+  const sb = createServerSupabase();
 
-  const winRate =
-    stats.wins + stats.losses > 0
-      ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(1)
-      : "0.0";
+  const { data: cycles } = await sb
+    .from("scan_cycles")
+    .select("*")
+    .order("triggered_at", { ascending: false })
+    .limit(30);
+
+  const { data: settingsRows } = await sb
+    .from("bot_settings")
+    .select("key, value");
+
+  const settings: Record<string, string> = {};
+  (settingsRows ?? []).forEach((r: { key: string; value: string }) => {
+    settings[r.key] = r.value;
+  });
+
+  const cycleList = (cycles ?? []) as {
+    id: number;
+    triggered_at: string;
+    duration_ms: number | null;
+    markets_found: number;
+    edges_found: number;
+    trades_placed: number;
+    mode: string;
+    status: string;
+    error_message: string | null;
+  }[];
+
+  const cycleIds = cycleList.map((c) => c.id);
+
+  let resultsByScan: Record<number, {
+    id: number;
+    city: string;
+    bracket_label: string;
+    side: string;
+    market_price: number;
+    forecast_prob: number;
+    edge_pct: number;
+    decision: string;
+    skip_reason: string | null;
+    trade_size_usd: number | null;
+  }[]> = {};
+
+  if (cycleIds.length > 0) {
+    const { data: results } = await sb
+      .from("scan_results")
+      .select("*")
+      .in("scan_id", cycleIds)
+      .order("edge_pct", { ascending: false });
+
+    for (const r of (results ?? []) as {
+      id: number;
+      scan_id: number;
+      city: string;
+      bracket_label: string;
+      side: string;
+      market_price: number;
+      forecast_prob: number;
+      edge_pct: number;
+      decision: string;
+      skip_reason: string | null;
+      trade_size_usd: number | null;
+    }[]) {
+      if (!resultsByScan[r.scan_id]) resultsByScan[r.scan_id] = [];
+      resultsByScan[r.scan_id].push(r);
+    }
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const scansToday = cycleList.filter(
+    (c) => c.triggered_at.slice(0, 10) === today,
+  ).length;
+
+  const lastScanAt = cycleList[0]?.triggered_at ?? null;
 
   return (
-    <RealtimeRefresher tables={["trades", "daily_pnl", "bot_settings"]}>
-    <div>
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
-        <h2 className="text-xl font-semibold">Overview</h2>
-        <span
-          className={`text-xs font-bold uppercase px-2.5 py-1 rounded-full ${
-            stats.mode === "live"
-              ? "bg-[var(--green)] text-black"
-              : "bg-[var(--yellow)] text-black"
-          }`}
-        >
-          {stats.mode}
-        </span>
-      </div>
+    <RealtimeRefresher tables={["scan_cycles", "scan_results"]}>
+      <div>
+        <h2 className="text-xl font-semibold mb-4">Activity Feed</h2>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <StatCard
-          label="Total P&L"
-          value={`$${stats.total_pnl.toFixed(2)}`}
-          sub={`avg $${stats.avg_pnl.toFixed(2)} / trade`}
-          color={stats.total_pnl >= 0 ? "green" : "red"}
+        <StatusBar
+          mode={settings.mode ?? "paper"}
+          lastScanAt={lastScanAt}
+          scansToday={scansToday}
+          connected={true}
         />
-        <StatCard
-          label="Today's P&L"
-          value={`$${stats.today_pnl.toFixed(2)}`}
-          sub={`${stats.today_trades} trades today`}
-          color={stats.today_pnl >= 0 ? "green" : "red"}
-        />
-        <StatCard
-          label="Win Rate"
-          value={`${winRate}%`}
-          sub={`${stats.wins}W / ${stats.losses}L`}
-          color={parseFloat(winRate) >= 50 ? "green" : "red"}
-        />
-        <StatCard
-          label="Total Trades"
-          value={String(stats.total_trades)}
-          sub={`${stats.pending} open`}
-        />
-      </div>
 
-      {/* Charts row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
-        <div className="lg:col-span-2">
-          <PnlChart data={pnlData} />
-        </div>
-        <CityBreakdown data={cityData} />
+        {cycleList.length === 0 ? (
+          <div className="bg-[var(--bg2)] border border-[var(--border)] rounded-xl p-8 text-center">
+            <p className="text-[var(--dim)] text-sm mb-2">No scans yet.</p>
+            <p className="text-[var(--dim)] text-xs">
+              Set up n8n to POST to <code className="text-[var(--text)]">/api/bot/run</code> with
+              your <code className="text-[var(--text)]">x-api-key</code> header to start scanning.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {cycleList.map((c) => (
+              <ScanCard
+                key={c.id}
+                cycle={c}
+                results={resultsByScan[c.id] ?? []}
+              />
+            ))}
+          </div>
+        )}
       </div>
-
-      {/* Bottom row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Open Positions */}
-        <div className="bg-[var(--bg2)] border border-[var(--border)] rounded-xl p-4">
-          <h3 className="text-sm text-[var(--dim)] mb-3">Open Positions</h3>
-          {positions.length === 0 ? (
-            <p className="text-[var(--dim)] text-sm text-center py-8">No open positions</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[var(--dim)] text-xs uppercase border-b border-[var(--border)]">
-                    <th className="text-left py-2 px-2">City</th>
-                    <th className="text-left py-2 px-2">Bracket</th>
-                    <th className="text-left py-2 px-2">Side</th>
-                    <th className="text-right py-2 px-2">Size</th>
-                    <th className="text-right py-2 px-2">Avg Price</th>
-                    <th className="text-right py-2 px-2">Edge</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {positions.map((p, i) => (
-                    <tr key={i} className="border-b border-[var(--border)] hover:bg-[var(--bg3)]">
-                      <td className="py-2 px-2">{p.city_slug.toUpperCase()}</td>
-                      <td className="py-2 px-2 font-mono">{p.bracket_label}</td>
-                      <td className="py-2 px-2">
-                        <span
-                          className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                            p.side === "BUY"
-                              ? "bg-[var(--blue)]/10 text-[var(--blue)]"
-                              : "bg-[var(--purple)]/10 text-[var(--purple)]"
-                          }`}
-                        >
-                          {p.side}
-                        </span>
-                      </td>
-                      <td className="py-2 px-2 text-right font-mono">${p.total_size.toFixed(2)}</td>
-                      <td className="py-2 px-2 text-right font-mono">${p.avg_price.toFixed(3)}</td>
-                      <td className="py-2 px-2 text-right font-mono">{p.avg_edge.toFixed(1)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <DailyPnlChart data={dailyData} />
-      </div>
-    </div>
     </RealtimeRefresher>
   );
 }

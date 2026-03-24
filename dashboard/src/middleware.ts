@@ -3,10 +3,10 @@ import { NextRequest, NextResponse } from "next/server";
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Public routes — must include /api/auth so POST can set the session cookie
   if (
     pathname === "/login" ||
     pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/bot/run") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon")
   ) {

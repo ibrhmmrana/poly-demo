@@ -1,17 +1,14 @@
 import Link from "next/link";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Overview", icon: "◎" },
+  { href: "/dashboard", label: "Activity", icon: "◎" },
   { href: "/dashboard/trades", label: "Trades", icon: "⇄" },
-  { href: "/dashboard/scans", label: "Scans", icon: "◉" },
-  { href: "/dashboard/signals", label: "Signals", icon: "⚡" },
   { href: "/dashboard/settings", label: "Settings", icon: "⚙" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
       <aside className="w-56 shrink-0 bg-[var(--bg2)] border-r border-[var(--border)] flex flex-col">
         <div className="px-5 py-5 border-b border-[var(--border)]">
           <h1 className="text-lg font-semibold text-[var(--text)]">Weather Bot</h1>
@@ -33,8 +30,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           Polymarket Weather Bot
         </div>
       </aside>
-
-      {/* Main content */}
       <main className="flex-1 overflow-y-auto p-6">{children}</main>
     </div>
   );

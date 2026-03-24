@@ -1,128 +1,64 @@
-export interface Database {
-  public: {
-    Tables: {
-      trades: {
-        Row: Trade;
-        Insert: Record<string, unknown>;
-        Update: Record<string, unknown>;
-      };
-      daily_pnl: {
-        Row: DailyPnl;
-        Insert: Record<string, unknown>;
-        Update: Record<string, unknown>;
-      };
-      markets: {
-        Row: MarketRow;
-        Insert: Record<string, unknown>;
-        Update: Record<string, unknown>;
-      };
-      scans: {
-        Row: ScanRow;
-        Insert: Record<string, unknown>;
-        Update: Record<string, unknown>;
-      };
-      signals: {
-        Row: SignalRow;
-        Insert: Record<string, unknown>;
-        Update: Record<string, unknown>;
-      };
-      bot_settings: {
-        Row: BotSetting;
-        Insert: Record<string, unknown>;
-        Update: Record<string, unknown>;
-      };
-    };
-  };
+export interface ScanCycle {
+  id: number;
+  triggered_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  markets_found: number;
+  edges_found: number;
+  trades_placed: number;
+  mode: string;
+  status: string;
+  error_message: string | null;
+  trigger_source: string | null;
+}
+
+export interface ScanResultRow {
+  id: number;
+  scan_id: number;
+  city: string;
+  target_date: string;
+  question: string | null;
+  bracket_label: string;
+  side: string;
+  market_price: number;
+  forecast_prob: number;
+  edge_pct: number;
+  decision: string;
+  skip_reason: string | null;
+  trade_size_usd: number | null;
+  condition_id: string | null;
+  token_id: string | null;
+  created_at: string;
 }
 
 export interface Trade {
   id: string;
-  market_condition_id: string;
-  bracket_token_id: string;
+  scan_id: number | null;
+  scan_result_id: number | null;
+  city: string;
   bracket_label: string;
-  city_slug: string;
-  side: "BUY" | "SELL";
-  price: number;
+  target_date: string | null;
+  side: string;
   size_usd: number;
-  size_shares: number;
-  forecast_prob: number;
-  market_prob: number;
-  edge_pct: number;
-  status: string;
+  size_shares: number | null;
+  price: number;
+  fill_price: number | null;
+  edge_pct: number | null;
+  forecast_prob: number | null;
+  market_prob: number | null;
   mode: string;
-  order_id: string;
-  fill_price: number;
+  status: string;
+  outcome: string;
   pnl: number;
-  outcome: "WIN" | "LOSS" | "PENDING";
+  order_id: string | null;
+  condition_id: string | null;
+  token_id: string | null;
   created_at: string;
   resolved_at: string | null;
 }
 
-export interface DailyPnl {
-  date: string;
-  realized: number;
-  unrealized: number;
-  num_trades: number;
-}
-
-export interface MarketRow {
-  condition_id: string;
-  question: string;
-  city_slug: string;
-  target_date: string;
-  end_date: string;
-  num_brackets: number;
-  brackets_json: BracketJson[];
-  active: boolean;
-  first_seen_at: string;
-  last_seen_at: string;
-}
-
-export interface BracketJson {
-  label: string;
-  token_id: string;
-  low: number | null;
-  high: number | null;
-  market_price: number;
-}
-
-export interface ScanRow {
-  id: number;
-  started_at: string;
-  markets_found: number;
-  new_markets: number;
-  duration_ms: number;
-}
-
-export interface SignalRow {
-  id: number;
-  market_condition_id: string;
-  bracket_label: string;
-  city_slug: string;
-  side: "BUY" | "SELL";
-  forecast_prob: number;
-  market_prob: number;
-  edge_pct: number;
-  suggested_size: number;
-  acted_on: boolean;
-  trade_id: string | null;
-  created_at: string;
-}
-
-export interface BotSetting {
+export interface BotSettingRow {
   key: string;
   value: string;
   updated_at: string;
-}
-
-export interface SummaryStats {
-  total_trades: number;
-  wins: number;
-  losses: number;
-  total_pnl: number;
-  avg_pnl: number;
-  today_pnl: number;
-  today_trades: number;
-  pending: number;
-  mode: string;
 }
