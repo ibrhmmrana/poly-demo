@@ -5,6 +5,7 @@ import { useState } from "react";
 interface ScanResultRow {
   id: number;
   city: string;
+  question?: string | null;
   bracket_label: string;
   side: string;
   market_price: number;
@@ -122,7 +123,7 @@ export default function ScanCard({ cycle, results }: Props) {
                     <th className="text-right py-2 pr-3">Market</th>
                     <th className="text-right py-2 pr-3">Edge</th>
                     <th className="text-left py-2 pr-3">Decision</th>
-                    <th className="text-left py-2">Detail</th>
+                    <th className="text-left py-2">Explanation</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -164,10 +165,8 @@ export default function ScanCard({ cycle, results }: Props) {
                           <span className="text-xs font-bold text-[var(--yellow)]">SKIP</span>
                         )}
                       </td>
-                      <td className="py-2 text-xs text-[var(--dim)]">
-                        {r.decision === "TRADED"
-                          ? `$${r.trade_size_usd?.toFixed(2) ?? "—"}`
-                          : r.skip_reason?.replace(/_/g, " ") ?? ""}
+                      <td className="py-2 text-xs text-[var(--dim)] leading-relaxed max-w-[480px]">
+                        {buildExplanation(r)}
                       </td>
                     </tr>
                   ))}
@@ -191,4 +190,42 @@ function Pill({ label, color }: { label: string; color?: string }) {
   return (
     <span className={`text-xs font-medium ${c}`}>{label}</span>
   );
+}
+
+function buildExplanation(r: ScanResultRow): string {
+  const city = r.city.toUpperCase();
+  const forecastPct = (r.forecast_prob * 100).toFixed(1);
+  const marketPct = (r.market_price * 100).toFixed(1);
+  const edgePct = r.edge_pct.toFixed(1);
+
+  if (r.decision === "TRADED") {
+    const sideVerb = r.side === "BUY" ? "buying this bracket" : "selling this bracket";
+    const size = r.trade_size_usd?.toFixed(2) ?? "0.00";
+    return `Traded because ${sideVerb} had a measurable edge in ${city}: forecast probability (${forecastPct}%) vs market price (${marketPct}%) created a ${edgePct}% edge, and risk checks approved a $${size} position.`;
+  }
+
+  const reason = (r.skip_reason ?? "").toLowerCase();
+  const reasonText: Record<string, string> = {
+    top_n_filter:
+      "it ranked below the current top-edge cutoff for this scan, so capital was focused on stronger signals",
+    scan_trade_cap:
+      "the per-scan trade cap was already reached before this signal was processed",
+    city_trade_cap:
+      "the per-city trade cap was already reached, preventing over-concentration in one city",
+    market_already_traded:
+      "another bracket from this same market was already traded in this scan",
+    min_size:
+      "Kelly sizing produced a position below the configured minimum trade size",
+    position_limit:
+      "existing exposure on this token was already at the configured position limit",
+    daily_limit_hit:
+      "the daily loss guardrail was triggered, so new trades were blocked",
+    kelly_negative:
+      "risk-adjusted expected value was not positive after Kelly sizing",
+    execution_failed:
+      "execution failed while attempting to place the order",
+  };
+
+  const fallback = "it did not pass execution/risk filters for this scan";
+  return `Skipped in ${city} even though the raw edge was ${edgePct}% (${forecastPct}% forecast vs ${marketPct}% market) because ${reasonText[reason] ?? fallback}.`;
 }

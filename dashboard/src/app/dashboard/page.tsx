@@ -40,6 +40,7 @@ export default async function ActivityPage() {
   let resultsByScan: Record<number, {
     id: number;
     city: string;
+    question?: string | null;
     bracket_label: string;
     side: string;
     market_price: number;
@@ -61,6 +62,7 @@ export default async function ActivityPage() {
       id: number;
       scan_id: number;
       city: string;
+      question?: string | null;
       bracket_label: string;
       side: string;
       market_price: number;
