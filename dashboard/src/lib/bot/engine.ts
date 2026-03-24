@@ -172,6 +172,7 @@ export async function runScanCycle(): Promise<ScanSummary> {
     const tradedMarkets = new Set<string>();
 
     let executionEligibleCount = 0;
+    let tradableCandidateCount = 0;
 
     for (const signal of edges) {
       // Use executable CLOB prices, not Gamma snapshot prices.
@@ -216,6 +217,8 @@ export async function runScanCycle(): Promise<ScanSummary> {
         });
         continue;
       }
+
+      tradableCandidateCount++;
 
       // Apply top-N after executable edge checks, not on raw snapshot edge.
       if (executionEligibleCount >= settings.topEdgesConsidered) {
@@ -360,7 +363,7 @@ export async function runScanCycle(): Promise<ScanSummary> {
         completed_at: new Date().toISOString(),
         duration_ms: duration,
         markets_found: markets.length,
-        edges_found: edges.length,
+        edges_found: tradableCandidateCount,
         trades_placed: tradesPlaced,
       })
       .eq("id", scanId);
@@ -369,7 +372,7 @@ export async function runScanCycle(): Promise<ScanSummary> {
       scanId,
       duration,
       marketsFound: markets.length,
-      edgesFound: edges.length,
+      edgesFound: tradableCandidateCount,
       tradesPlaced,
       mode: settings.mode,
       results,

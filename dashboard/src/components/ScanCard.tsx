@@ -166,11 +166,11 @@ export default function ScanCard({ cycle, results }: Props) {
                               className="underline decoration-dotted underline-offset-2 hover:text-[var(--blue)]"
                               onClick={() => handleForecastClick(r)}
                             >
-                              {(r.forecast_prob * 100).toFixed(1)}%
+                              {formatPercent(r.forecast_prob)}
                             </button>
                           </td>
                           <td className="py-2 pr-3 text-right font-mono">
-                            {(r.market_price * 100).toFixed(1)}%
+                            {formatPercent(r.market_price)}
                           </td>
                           <td className="py-2 pr-3 text-right font-mono text-[var(--green)]">
                             {r.edge_pct.toFixed(1)}%
@@ -300,8 +300,8 @@ function Pill({ label, color }: { label: string; color?: string }) {
 
 function buildExplanation(r: ScanResultRow): string {
   const city = r.city.toUpperCase();
-  const forecastPct = (r.forecast_prob * 100).toFixed(1);
-  const marketPct = (r.market_price * 100).toFixed(1);
+  const forecastPct = formatPercent(r.forecast_prob).replace("%", "");
+  const marketPct = formatPercent(r.market_price).replace("%", "");
   const edgePct = r.edge_pct.toFixed(1);
 
   if (r.decision === "TRADED") {
@@ -338,4 +338,11 @@ function buildExplanation(r: ScanResultRow): string {
 
   const fallback = "it did not pass execution/risk filters for this scan";
   return `Skipped in ${city} even though the raw edge was ${edgePct}% (${forecastPct}% forecast vs ${marketPct}% market) because ${reasonText[reason] ?? fallback}.`;
+}
+
+function formatPercent(prob: number): string {
+  const pct = prob * 100;
+  if (!Number.isFinite(pct)) return "—";
+  if (pct > 0 && pct < 0.1) return "<0.1%";
+  return `${pct.toFixed(1)}%`;
 }
