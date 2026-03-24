@@ -7,11 +7,34 @@ interface SettingsFormProps {
   initialSettings: Record<string, string>;
 }
 
+type ProviderTest = {
+  ok: boolean;
+  latencyMs: number;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
+type DiagnosticsResponse = {
+  ok: boolean;
+  okCount: number;
+  total: number;
+  testedAt: string;
+  tests: {
+    gamma: ProviderTest;
+    clob: ProviderTest;
+    openMeteo: ProviderTest;
+    noaa: ProviderTest;
+  };
+};
+
 export default function SettingsForm({ initialSettings }: SettingsFormProps) {
   const [settings, setSettings] = useState(initialSettings);
   const [isPending, startTransition] = useTransition();
   const [confirmLive, setConfirmLive] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagError, setDiagError] = useState<string | null>(null);
+  const [diagResult, setDiagResult] = useState<DiagnosticsResponse | null>(null);
 
   function save(key: string, value: string) {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -36,6 +59,24 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
   function confirmGoLive() {
     save("mode", "live");
     setConfirmLive(false);
+  }
+
+  async function runDiagnostics() {
+    try {
+      setDiagLoading(true);
+      setDiagError(null);
+      const res = await fetch("/api/diagnostics/providers", { cache: "no-store" });
+      const payload = (await res.json()) as DiagnosticsResponse | { error: string };
+      if (!res.ok || !("tests" in payload)) {
+        throw new Error("error" in payload ? payload.error : "Diagnostics failed");
+      }
+      setDiagResult(payload);
+    } catch (error) {
+      setDiagError(error instanceof Error ? error.message : "Diagnostics request failed");
+      setDiagResult(null);
+    } finally {
+      setDiagLoading(false);
+    }
   }
 
   const apiKeyHint = process.env.NEXT_PUBLIC_BOT_API_KEY_HINT ?? "••••••";
@@ -127,6 +168,10 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
           <ThresholdInput label="Max Position USD" settingKey="max_position_usd" value={settings.max_position_usd ?? "10"} min={1} max={100} step={1} suffix="$" onChange={save} isSaved={saved === "max_position_usd"} />
           <ThresholdInput label="Kelly Fraction" settingKey="kelly_fraction" value={settings.kelly_fraction ?? "0.25"} min={0.05} max={1} step={0.05} suffix="x" onChange={save} isSaved={saved === "kelly_fraction"} />
           <ThresholdInput label="Daily Loss Limit USD" settingKey="daily_loss_limit_usd" value={settings.daily_loss_limit_usd ?? "-20"} min={-200} max={0} step={5} suffix="$" onChange={save} isSaved={saved === "daily_loss_limit_usd"} />
+          <ThresholdInput label="Min Trade USD" settingKey="min_trade_usd" value={settings.min_trade_usd ?? "0.75"} min={0.1} max={10} step={0.1} suffix="$" onChange={save} isSaved={saved === "min_trade_usd"} />
+          <ThresholdInput label="Top Edges Considered" settingKey="top_edges_considered" value={settings.top_edges_considered ?? "12"} min={1} max={40} step={1} suffix="" onChange={save} isSaved={saved === "top_edges_considered"} />
+          <ThresholdInput label="Max Trades / Scan" settingKey="max_trades_per_scan" value={settings.max_trades_per_scan ?? "5"} min={1} max={20} step={1} suffix="" onChange={save} isSaved={saved === "max_trades_per_scan"} />
+          <ThresholdInput label="Max Trades / City" settingKey="max_trades_per_city" value={settings.max_trades_per_city ?? "2"} min={1} max={10} step={1} suffix="" onChange={save} isSaved={saved === "max_trades_per_city"} />
         </div>
       </Section>
 
@@ -150,6 +195,43 @@ export default function SettingsForm({ initialSettings }: SettingsFormProps) {
             to the endpoint above at your desired frequency. Each call runs one full
             scan cycle: market discovery, forecast, edge detection, and trade execution.
           </p>
+        </div>
+      </Section>
+
+      <Section title="API Diagnostics">
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={runDiagnostics}
+              disabled={diagLoading}
+              className="px-4 py-2 rounded-lg bg-[var(--blue)] text-black text-sm font-semibold disabled:opacity-60"
+            >
+              {diagLoading ? "Running..." : "Run Provider Diagnostics"}
+            </button>
+            {diagResult && (
+              <span
+                className={`text-xs font-semibold ${
+                  diagResult.ok ? "text-[var(--green)]" : "text-[var(--yellow)]"
+                }`}
+              >
+                {diagResult.okCount}/{diagResult.total} checks passed
+              </span>
+            )}
+          </div>
+
+          {diagError && <p className="text-xs text-[var(--red)]">{diagError}</p>}
+
+          {diagResult && (
+            <div className="space-y-2">
+              <ProviderRow label="Polymarket Gamma" result={diagResult.tests.gamma} />
+              <ProviderRow label="Polymarket CLOB" result={diagResult.tests.clob} />
+              <ProviderRow label="Open-Meteo" result={diagResult.tests.openMeteo} />
+              <ProviderRow label="NOAA (weather.gov)" result={diagResult.tests.noaa} />
+              <p className="text-xs text-[var(--dim)]">
+                Last checked: {new Date(diagResult.testedAt).toLocaleString()}
+              </p>
+            </div>
+          )}
         </div>
       </Section>
 
@@ -203,4 +285,21 @@ function ThresholdInput({
 
 function Saved() {
   return <span className="text-xs text-[var(--green)] ml-2 animate-pulse">saved</span>;
+}
+
+function ProviderRow({ label, result }: { label: string; result: ProviderTest }) {
+  return (
+    <div className="flex items-center justify-between rounded border border-[var(--border)] px-3 py-2">
+      <div>
+        <p className="text-sm text-[var(--text)]">{label}</p>
+        <p className="text-xs text-[var(--dim)]">{result.message}</p>
+      </div>
+      <div className="text-right">
+        <p className={`text-xs font-semibold ${result.ok ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+          {result.ok ? "OK" : "FAIL"}
+        </p>
+        <p className="text-xs text-[var(--dim)]">{result.latencyMs} ms</p>
+      </div>
+    </div>
+  );
 }

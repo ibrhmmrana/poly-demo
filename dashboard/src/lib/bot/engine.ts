@@ -6,6 +6,11 @@ import { sizeTrade } from "./risk";
 import { executePaper, executeLive } from "./trader";
 import type { BotSettings, ScanResult, ScanSummary } from "./types";
 
+function toNumber(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function getServiceSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_KEY;
@@ -23,10 +28,14 @@ async function loadSettings(): Promise<BotSettings> {
   return {
     mode: (map.mode ?? "paper") as "paper" | "live",
     botPaused: map.bot_paused === "true",
-    minEdgePct: parseFloat(map.min_edge_pct ?? "15"),
-    maxPositionUsd: parseFloat(map.max_position_usd ?? "10"),
-    kellyFraction: parseFloat(map.kelly_fraction ?? "0.25"),
-    dailyLossLimitUsd: parseFloat(map.daily_loss_limit_usd ?? "-20"),
+    minEdgePct: toNumber(map.min_edge_pct, 15),
+    maxPositionUsd: toNumber(map.max_position_usd, 10),
+    kellyFraction: toNumber(map.kelly_fraction, 0.25),
+    dailyLossLimitUsd: toNumber(map.daily_loss_limit_usd, -20),
+    minTradeUsd: toNumber(map.min_trade_usd, 0.75),
+    topEdgesConsidered: Math.max(1, Math.floor(toNumber(map.top_edges_considered, 12))),
+    maxTradesPerScan: Math.max(1, Math.floor(toNumber(map.max_trades_per_scan, 5))),
+    maxTradesPerCity: Math.max(1, Math.floor(toNumber(map.max_trades_per_city, 2))),
   };
 }
 
@@ -115,14 +124,54 @@ export async function runScanCycle(): Promise<ScanSummary> {
 
     // 5. Find edges
     const edges = findEdges(markets, forecasts, settings.minEdgePct);
+    const limitedEdges = edges.slice(0, Math.max(1, settings.topEdgesConsidered));
 
     // 6. Size & execute each edge
     const dailyPnl = await getDailyPnl();
     const positions = await getPositionMap();
     const results: ScanResult[] = [];
     let tradesPlaced = 0;
+    const tradesPerCity = new Map<string, number>();
+    const tradedMarkets = new Set<string>();
 
-    for (const signal of edges) {
+    // Mark all non-top-N edges as skipped so dashboard clearly shows why.
+    for (const signal of edges.slice(limitedEdges.length)) {
+      results.push({
+        signal,
+        decision: "SKIPPED",
+        skipReason: "top_n_filter",
+      });
+    }
+
+    for (const signal of limitedEdges) {
+      if (tradesPlaced >= settings.maxTradesPerScan) {
+        results.push({
+          signal,
+          decision: "SKIPPED",
+          skipReason: "scan_trade_cap",
+        });
+        continue;
+      }
+
+      const cityCount = tradesPerCity.get(signal.market.citySlug) ?? 0;
+      if (cityCount >= settings.maxTradesPerCity) {
+        results.push({
+          signal,
+          decision: "SKIPPED",
+          skipReason: "city_trade_cap",
+        });
+        continue;
+      }
+
+      if (tradedMarkets.has(signal.market.conditionId)) {
+        results.push({
+          signal,
+          decision: "SKIPPED",
+          skipReason: "market_already_traded",
+        });
+        continue;
+      }
+
       const { sizeUsd, skipReason } = sizeTrade(
         signal,
         settings,
@@ -185,6 +234,8 @@ export async function runScanCycle(): Promise<ScanSummary> {
         signal.bracket.tokenId,
         (positions.get(signal.bracket.tokenId) ?? 0) + sizeUsd,
       );
+      tradedMarkets.add(signal.market.conditionId);
+      tradesPerCity.set(signal.market.citySlug, cityCount + 1);
 
       results.push({
         signal,

@@ -54,6 +54,11 @@ export type SkipReason =
   | "daily_limit_hit"
   | "position_limit"
   | "kelly_negative"
+  | "min_size"
+  | "top_n_filter"
+  | "scan_trade_cap"
+  | "city_trade_cap"
+  | "market_already_traded"
   | "bot_paused"
   | "execution_failed";
 
@@ -83,4 +88,8 @@ export interface BotSettings {
   maxPositionUsd: number;
   kellyFraction: number;
   dailyLossLimitUsd: number;
+  minTradeUsd: number;
+  topEdgesConsidered: number;
+  maxTradesPerScan: number;
+  maxTradesPerCity: number;
 }

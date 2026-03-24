@@ -51,5 +51,9 @@ export function sizeTrade(
   }
   if (size <= 0) return { sizeUsd: 0, skipReason: "position_limit" };
 
+  if (size < settings.minTradeUsd) {
+    return { sizeUsd: 0, skipReason: "min_size" };
+  }
+
   return { sizeUsd: Math.round(size * 100) / 100 };
 }
