@@ -121,6 +121,7 @@ export default function ScanCard({ cycle, results }: Props) {
                 <thead>
                   <tr className="text-[var(--dim)] text-xs uppercase border-b border-[var(--border)]">
                     <th className="text-left py-2 pr-3">City</th>
+                    <th className="text-left py-2 pr-3">Question</th>
                     <th className="text-left py-2 pr-3">Bracket</th>
                     <th className="text-left py-2 pr-3">Side</th>
                     <th className="text-right py-2 pr-3">Forecast</th>
@@ -143,6 +144,11 @@ export default function ScanCard({ cycle, results }: Props) {
                           }`}
                         >
                           <td className="py-2 pr-3 font-medium">{r.city.toUpperCase()}</td>
+                          <td className="py-2 pr-3 text-xs text-[var(--dim)] max-w-[280px]">
+                            <span className="line-clamp-2 text-[var(--text)]">
+                              {r.question ?? "—"}
+                            </span>
+                          </td>
                           <td className="py-2 pr-3 font-mono text-xs">{r.bracket_label}</td>
                           <td className="py-2 pr-3">
                             <span
@@ -182,7 +188,7 @@ export default function ScanCard({ cycle, results }: Props) {
                         </tr>
                         {isActive && (
                           <tr className="border-b border-[var(--border)] last:border-b-0">
-                            <td colSpan={8} className="py-2 px-3 bg-[var(--bg3)]/50">
+                            <td colSpan={9} className="py-2 px-3 bg-[var(--bg3)]/50">
                               {loading && (
                                 <p className="text-xs text-[var(--dim)]">Loading forecast provider details...</p>
                               )}
