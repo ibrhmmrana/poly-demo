@@ -68,6 +68,7 @@ async function loadSettings(): Promise<BotSettings> {
     topEdgesConsidered: Math.max(1, Math.floor(toNumber(map.top_edges_considered, 12))),
     maxTradesPerScan: Math.max(1, Math.floor(toNumber(map.max_trades_per_scan, 5))),
     maxTradesPerCity: Math.max(1, Math.floor(toNumber(map.max_trades_per_city, 2))),
+    maxSpread: toNumber(map.max_spread, 0.35),
   };
 }
 
@@ -215,17 +216,6 @@ export async function runScanCycle(): Promise<ScanSummary> {
         continue;
       }
 
-      // Guard against extremely wide/illiquid books.
-      const maxSpread = 0.2;
-      if (top.spread > maxSpread) {
-        results.push({
-          signal,
-          decision: "SKIPPED",
-          skipReason: "book_too_thin",
-        });
-        continue;
-      }
-
       // Recompute edge on executable price:
       // BUY uses ask, SELL uses bid.
       const executablePrice = signal.side === "BUY" ? top.ask : top.bid;
@@ -251,6 +241,16 @@ export async function runScanCycle(): Promise<ScanSummary> {
         marketPrice: executablePrice,
         edgePct: executableEdge,
       };
+
+      // Guard against extremely wide/illiquid books after capturing tradable context.
+      if (top.spread > settings.maxSpread) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "book_too_thin",
+        });
+        continue;
+      }
 
       const { sizeUsd, skipReason } = sizeTrade(
         pricedSignal,

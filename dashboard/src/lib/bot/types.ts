@@ -92,4 +92,5 @@ export interface BotSettings {
   topEdgesConsidered: number;
   maxTradesPerScan: number;
   maxTradesPerCity: number;
+  maxSpread: number;
 }

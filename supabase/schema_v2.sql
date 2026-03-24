@@ -125,6 +125,7 @@ insert into bot_settings (key, value) values
   ('kelly_fraction',       '0.25'),
   ('daily_loss_limit_usd', '-20'),
   ('min_trade_usd',        '0.75'),
+  ('max_spread',           '0.35'),
   ('top_edges_considered', '12'),
   ('max_trades_per_scan',  '5'),
   ('max_trades_per_city',  '2');

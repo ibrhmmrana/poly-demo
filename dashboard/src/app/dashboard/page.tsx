@@ -41,6 +41,7 @@ export default async function ActivityPage() {
     id: number;
     city: string;
     question?: string | null;
+    target_date?: string | null;
     bracket_label: string;
     side: string;
     market_price: number;
@@ -63,6 +64,7 @@ export default async function ActivityPage() {
       scan_id: number;
       city: string;
       question?: string | null;
+      target_date?: string | null;
       bracket_label: string;
       side: string;
       market_price: number;

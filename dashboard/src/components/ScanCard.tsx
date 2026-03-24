@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 interface ScanResultRow {
   id: number;
@@ -14,6 +14,7 @@ interface ScanResultRow {
   decision: string;
   skip_reason: string | null;
   trade_size_usd: number | null;
+  target_date?: string | null;
 }
 
 interface ScanCycle {
@@ -35,6 +36,9 @@ interface Props {
 
 export default function ScanCard({ cycle, results }: Props) {
   const [open, setOpen] = useState(results.length > 0 && results.length <= 12);
+  const [activeForecastRow, setActiveForecastRow] = useState<number | null>(null);
+  const [loadingForecastRow, setLoadingForecastRow] = useState<number | null>(null);
+  const [forecastDetailsByRow, setForecastDetailsByRow] = useState<Record<number, ForecastDetails | { error: string }>>({});
 
   const ts = new Date(cycle.triggered_at);
   const time = ts.toLocaleString("en-US", {
@@ -127,49 +131,96 @@ export default function ScanCard({ cycle, results }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((r) => (
-                    <tr
-                      key={r.id}
-                      className={`border-b border-[var(--border)] last:border-b-0 ${
-                        r.decision === "TRADED"
-                          ? "bg-[var(--green)]/5"
-                          : ""
-                      }`}
-                    >
-                      <td className="py-2 pr-3 font-medium">{r.city.toUpperCase()}</td>
-                      <td className="py-2 pr-3 font-mono text-xs">{r.bracket_label}</td>
-                      <td className="py-2 pr-3">
-                        <span
-                          className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
-                            r.side === "BUY"
-                              ? "bg-[var(--blue)]/15 text-[var(--blue)]"
-                              : "bg-[var(--purple)]/15 text-[var(--purple)]"
+                  {results.map((r) => {
+                    const isActive = activeForecastRow === r.id;
+                    const details = forecastDetailsByRow[r.id];
+                    const loading = loadingForecastRow === r.id;
+                    return (
+                      <Fragment key={r.id}>
+                        <tr
+                          className={`border-b border-[var(--border)] ${
+                            r.decision === "TRADED" ? "bg-[var(--green)]/5" : ""
                           }`}
                         >
-                          {r.side}
-                        </span>
-                      </td>
-                      <td className="py-2 pr-3 text-right font-mono">
-                        {(r.forecast_prob * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2 pr-3 text-right font-mono">
-                        {(r.market_price * 100).toFixed(1)}%
-                      </td>
-                      <td className="py-2 pr-3 text-right font-mono text-[var(--green)]">
-                        {r.edge_pct.toFixed(1)}%
-                      </td>
-                      <td className="py-2 pr-3">
-                        {r.decision === "TRADED" ? (
-                          <span className="text-xs font-bold text-[var(--green)]">TRADED</span>
-                        ) : (
-                          <span className="text-xs font-bold text-[var(--yellow)]">SKIP</span>
+                          <td className="py-2 pr-3 font-medium">{r.city.toUpperCase()}</td>
+                          <td className="py-2 pr-3 font-mono text-xs">{r.bracket_label}</td>
+                          <td className="py-2 pr-3">
+                            <span
+                              className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+                                r.side === "BUY"
+                                  ? "bg-[var(--blue)]/15 text-[var(--blue)]"
+                                  : "bg-[var(--purple)]/15 text-[var(--purple)]"
+                              }`}
+                            >
+                              {r.side}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-3 text-right font-mono">
+                            <button
+                              className="underline decoration-dotted underline-offset-2 hover:text-[var(--blue)]"
+                              onClick={() => handleForecastClick(r)}
+                            >
+                              {(r.forecast_prob * 100).toFixed(1)}%
+                            </button>
+                          </td>
+                          <td className="py-2 pr-3 text-right font-mono">
+                            {(r.market_price * 100).toFixed(1)}%
+                          </td>
+                          <td className="py-2 pr-3 text-right font-mono text-[var(--green)]">
+                            {r.edge_pct.toFixed(1)}%
+                          </td>
+                          <td className="py-2 pr-3">
+                            {r.decision === "TRADED" ? (
+                              <span className="text-xs font-bold text-[var(--green)]">TRADED</span>
+                            ) : (
+                              <span className="text-xs font-bold text-[var(--yellow)]">SKIP</span>
+                            )}
+                          </td>
+                          <td className="py-2 text-xs text-[var(--dim)] leading-relaxed max-w-[480px]">
+                            {buildExplanation(r)}
+                          </td>
+                        </tr>
+                        {isActive && (
+                          <tr className="border-b border-[var(--border)] last:border-b-0">
+                            <td colSpan={8} className="py-2 px-3 bg-[var(--bg3)]/50">
+                              {loading && (
+                                <p className="text-xs text-[var(--dim)]">Loading forecast provider details...</p>
+                              )}
+                              {!loading && details && !("error" in details) && (
+                                <div className="space-y-1 text-xs text-[var(--dim)]">
+                                  <p>
+                                    Source: <span className="text-[var(--text)]">{details.source}</span> | Unit:{" "}
+                                    <span className="text-[var(--text)]">{details.unit}</span> | Latency:{" "}
+                                    <span className="text-[var(--text)]">{details.latencyMs}ms</span>
+                                  </p>
+                                  <p>
+                                    API URL: <code className="text-[var(--text)] break-all">{details.requestUrl}</code>
+                                  </p>
+                                  <p>
+                                    Summary: <span className="text-[var(--text)]">{details.summary.points}</span> hourly points,{" "}
+                                    min <span className="text-[var(--text)]">{details.summary.min ?? "n/a"}</span>, max{" "}
+                                    <span className="text-[var(--text)]">{details.summary.max ?? "n/a"}</span>
+                                  </p>
+                                  <p>
+                                    First samples:{" "}
+                                    <span className="text-[var(--text)]">
+                                      {details.hourly
+                                        .slice(0, 6)
+                                        .map((x) => `${x.time?.slice(11, 16) ?? "??:??"} ${x.temp.toFixed(1)}`)
+                                        .join(" | ")}
+                                    </span>
+                                  </p>
+                                </div>
+                              )}
+                              {!loading && details && "error" in details && (
+                                <p className="text-xs text-[var(--red)]">{details.error}</p>
+                              )}
+                            </td>
+                          </tr>
                         )}
-                      </td>
-                      <td className="py-2 text-xs text-[var(--dim)] leading-relaxed max-w-[480px]">
-                        {buildExplanation(r)}
-                      </td>
-                    </tr>
-                  ))}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -178,6 +229,55 @@ export default function ScanCard({ cycle, results }: Props) {
       )}
     </div>
   );
+
+  async function handleForecastClick(r: ScanResultRow) {
+    if (activeForecastRow === r.id) {
+      setActiveForecastRow(null);
+      return;
+    }
+    setActiveForecastRow(r.id);
+    if (forecastDetailsByRow[r.id]) {
+      return;
+    }
+    const targetDate = r.target_date ?? null;
+    if (!targetDate) {
+      setForecastDetailsByRow((prev) => ({
+        ...prev,
+        [r.id]: { error: "No target date found for this row." },
+      }));
+      return;
+    }
+    try {
+      setLoadingForecastRow(r.id);
+      const url = `/api/forecast/details?city=${encodeURIComponent(r.city)}&date=${encodeURIComponent(targetDate)}`;
+      const res = await fetch(url, { cache: "no-store" });
+      const payload = (await res.json()) as ForecastDetails | { error: string };
+      if (!res.ok || "error" in payload) {
+        throw new Error("error" in payload ? payload.error : "Failed to fetch details");
+      }
+      setForecastDetailsByRow((prev) => ({ ...prev, [r.id]: payload }));
+    } catch (error) {
+      setForecastDetailsByRow((prev) => ({
+        ...prev,
+        [r.id]: { error: error instanceof Error ? error.message : "Failed to fetch details" },
+      }));
+    } finally {
+      setLoadingForecastRow(null);
+    }
+  }
+}
+
+interface ForecastDetails {
+  source: string;
+  requestUrl: string;
+  latencyMs: number;
+  unit: string;
+  summary: {
+    points: number;
+    min: number | null;
+    max: number | null;
+  };
+  hourly: Array<{ time: string | null; temp: number }>;
 }
 
 function Pill({ label, color }: { label: string; color?: string }) {
@@ -206,6 +306,10 @@ function buildExplanation(r: ScanResultRow): string {
 
   const reason = (r.skip_reason ?? "").toLowerCase();
   const reasonText: Record<string, string> = {
+    edge_below_threshold:
+      "the tradable edge (using executable bid/ask) fell below your minimum edge threshold",
+    book_too_thin:
+      "the order book spread/liquidity was too weak to execute with acceptable slippage",
     top_n_filter:
       "it ranked below the current top-edge cutoff for this scan, so capital was focused on stronger signals",
     scan_trade_cap:
