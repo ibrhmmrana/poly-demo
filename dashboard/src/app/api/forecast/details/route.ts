@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
   url.searchParams.set("hourly", "temperature_2m");
   url.searchParams.set("start_date", date);
   url.searchParams.set("end_date", date);
-  url.searchParams.set("timezone", "UTC");
+  url.searchParams.set("timezone", "auto");
 
   try {
     const started = Date.now();

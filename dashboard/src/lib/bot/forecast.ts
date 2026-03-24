@@ -5,7 +5,7 @@ const OPENMETEO = "https://api.open-meteo.com/v1/forecast";
 
 // Forecast standard-deviation widens with forecast horizon (empirical)
 const STD_BY_HOURS: [number, number][] = [
-  [6, 1.5], [12, 2.0], [24, 2.5], [36, 3.0], [48, 3.5], [72, 4.5],
+  [6, 1.2], [12, 1.6], [24, 2.0], [36, 2.4], [48, 2.8], [72, 3.6],
 ];
 
 function interpolateStd(hoursOut: number): number {
@@ -59,26 +59,59 @@ function bracketProb(
   return 0;
 }
 
+function mean(values: number[]): number {
+  if (!values.length) return 0;
+  return values.reduce((a, b) => a + b, 0) / values.length;
+}
+
+function stdDev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const m = mean(values);
+  const variance =
+    values.reduce((acc, v) => acc + (v - m) * (v - m), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
 function buildDistribution(
   pointForecast: number,
   rawHourly: number[],
   hoursOut: number,
   brackets: Bracket[],
 ): Record<string, number> {
-  let sigma = interpolateStd(hoursOut);
+  const sigmaBase = interpolateStd(hoursOut);
+  const hourlyStd = rawHourly.length >= 8 ? stdDev(rawHourly) : 0;
 
-  if (rawHourly.length >= 4) {
-    const top4 = [...rawHourly].sort((a, b) => b - a).slice(0, 4);
-    const spread = top4[0] - top4[top4.length - 1];
-    sigma = Math.max(sigma, spread / 2);
-  }
+  // Blend horizon uncertainty with observed intraday volatility.
+  let sigma = sigmaBase * 0.75 + Math.max(hourlyStd, 0.35) * 0.25;
+
+  // Clamp to avoid over-fat tails that inflate far-out buckets.
+  if (hoursOut <= 36) sigma = Math.min(Math.max(sigma, 0.6), 2.2);
+  else if (hoursOut <= 72) sigma = Math.min(Math.max(sigma, 0.7), 3.0);
+  else sigma = Math.min(Math.max(sigma, 0.8), 3.5);
+
+  const observedMin = rawHourly.length ? Math.min(...rawHourly) : pointForecast - 3;
+  const observedMax = rawHourly.length ? Math.max(...rawHourly) : pointForecast + 3;
 
   const raw: Record<string, number> = {};
   let total = 0;
   for (const b of brackets) {
-    const p = bracketProb(b, pointForecast, sigma);
-    raw[b.label] = p;
-    total += p;
+    let p = bracketProb(b, pointForecast, sigma);
+
+    // Penalize extreme tails outside observed forecast range to avoid
+    // unrealistic probabilities (e.g. 14C when model max is 12.9C).
+    let distanceOutside = 0;
+    if (b.low !== null && b.low > observedMax + 0.5) {
+      distanceOutside = b.low - observedMax;
+    } else if (b.high !== null && b.high < observedMin - 0.5) {
+      distanceOutside = observedMin - b.high;
+    }
+    if (distanceOutside > 0) {
+      const penalty = Math.exp(-1.3 * distanceOutside);
+      p *= penalty;
+    }
+
+    raw[b.label] = Math.max(p, 0);
+    total += raw[b.label];
   }
 
   if (total > 0) {
@@ -100,7 +133,7 @@ async function fetchOpenMeteo(
     url.searchParams.set("hourly", "temperature_2m");
     url.searchParams.set("start_date", dateStr);
     url.searchParams.set("end_date", dateStr);
-    url.searchParams.set("timezone", "UTC");
+    url.searchParams.set("timezone", "auto");
 
     const res = await fetch(url.toString());
     if (!res.ok) return null;
