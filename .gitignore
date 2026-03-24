@@ -30,3 +30,9 @@ dist/
 
 # Logs
 *.log
+
+# Local runtime state
+*.db
+*.sqlite
+*.sqlite3
+*.pid
