@@ -162,7 +162,6 @@ export async function runScanCycle(): Promise<ScanSummary> {
 
     // 5. Find edges
     const edges = findEdges(markets, forecasts, settings.minEdgePct);
-    const limitedEdges = edges.slice(0, Math.max(1, settings.topEdgesConsidered));
 
     // 6. Size & execute each edge
     const dailyPnl = await getDailyPnl();
@@ -172,44 +171,9 @@ export async function runScanCycle(): Promise<ScanSummary> {
     const tradesPerCity = new Map<string, number>();
     const tradedMarkets = new Set<string>();
 
-    // Mark all non-top-N edges as skipped so dashboard clearly shows why.
-    for (const signal of edges.slice(limitedEdges.length)) {
-      results.push({
-        signal,
-        decision: "SKIPPED",
-        skipReason: "top_n_filter",
-      });
-    }
+    let executionEligibleCount = 0;
 
-    for (const signal of limitedEdges) {
-      if (tradesPlaced >= settings.maxTradesPerScan) {
-        results.push({
-          signal,
-          decision: "SKIPPED",
-          skipReason: "scan_trade_cap",
-        });
-        continue;
-      }
-
-      const cityCount = tradesPerCity.get(signal.market.citySlug) ?? 0;
-      if (cityCount >= settings.maxTradesPerCity) {
-        results.push({
-          signal,
-          decision: "SKIPPED",
-          skipReason: "city_trade_cap",
-        });
-        continue;
-      }
-
-      if (tradedMarkets.has(signal.market.conditionId)) {
-        results.push({
-          signal,
-          decision: "SKIPPED",
-          skipReason: "market_already_traded",
-        });
-        continue;
-      }
-
+    for (const signal of edges) {
       // Use executable CLOB prices, not Gamma snapshot prices.
       const top = await fetchBookTop(signal.bracket.tokenId);
       if (top.bid === null || top.ask === null || top.spread === null) {
@@ -228,24 +192,20 @@ export async function runScanCycle(): Promise<ScanSummary> {
         signal.side === "BUY"
           ? (signal.forecastProb - executablePrice) * 100
           : (executablePrice - signal.forecastProb) * 100;
-      if (executableEdge < settings.minEdgePct) {
-        results.push({
-          signal: {
-            ...signal,
-            marketPrice: executablePrice,
-            edgePct: executableEdge,
-          },
-          decision: "SKIPPED",
-          skipReason: "edge_below_threshold",
-        });
-        continue;
-      }
-
       const pricedSignal = {
         ...signal,
         marketPrice: executablePrice,
         edgePct: executableEdge,
       };
+
+      if (executableEdge < settings.minEdgePct) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "edge_below_threshold",
+        });
+        continue;
+      }
 
       // Guard against extremely wide/illiquid books after capturing tradable context.
       if (top.spread > settings.maxSpread) {
@@ -253,6 +213,45 @@ export async function runScanCycle(): Promise<ScanSummary> {
           signal: pricedSignal,
           decision: "SKIPPED",
           skipReason: "book_too_thin",
+        });
+        continue;
+      }
+
+      // Apply top-N after executable edge checks, not on raw snapshot edge.
+      if (executionEligibleCount >= settings.topEdgesConsidered) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "top_n_filter",
+        });
+        continue;
+      }
+      executionEligibleCount++;
+
+      if (tradesPlaced >= settings.maxTradesPerScan) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "scan_trade_cap",
+        });
+        continue;
+      }
+
+      const cityCount = tradesPerCity.get(pricedSignal.market.citySlug) ?? 0;
+      if (cityCount >= settings.maxTradesPerCity) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "city_trade_cap",
+        });
+        continue;
+      }
+
+      if (tradedMarkets.has(pricedSignal.market.conditionId)) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "market_already_traded",
         });
         continue;
       }
