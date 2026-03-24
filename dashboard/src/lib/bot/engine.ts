@@ -18,6 +18,38 @@ function getServiceSupabase() {
   return createClient(url, key);
 }
 
+type BookTop = {
+  bid: number | null;
+  ask: number | null;
+  spread: number | null;
+};
+
+async function fetchBookTop(tokenId: string): Promise<BookTop> {
+  try {
+    const res = await fetch(
+      `https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) {
+      return { bid: null, ask: null, spread: null };
+    }
+    const book = (await res.json()) as {
+      bids?: Array<{ price?: string | number }>;
+      asks?: Array<{ price?: string | number }>;
+    };
+    const bidRaw = book.bids?.[0]?.price;
+    const askRaw = book.asks?.[0]?.price;
+    const bid = bidRaw === undefined ? null : Number(bidRaw);
+    const ask = askRaw === undefined ? null : Number(askRaw);
+    if (bid === null || ask === null || !Number.isFinite(bid) || !Number.isFinite(ask)) {
+      return { bid: null, ask: null, spread: null };
+    }
+    return { bid, ask, spread: ask - bid };
+  } catch {
+    return { bid: null, ask: null, spread: null };
+  }
+}
+
 async function loadSettings(): Promise<BotSettings> {
   const sb = getServiceSupabase();
   const { data } = await sb.from("bot_settings").select("key, value");
@@ -172,8 +204,56 @@ export async function runScanCycle(): Promise<ScanSummary> {
         continue;
       }
 
+      // Use executable CLOB prices, not Gamma snapshot prices.
+      const top = await fetchBookTop(signal.bracket.tokenId);
+      if (top.bid === null || top.ask === null || top.spread === null) {
+        results.push({
+          signal,
+          decision: "SKIPPED",
+          skipReason: "book_too_thin",
+        });
+        continue;
+      }
+
+      // Guard against extremely wide/illiquid books.
+      const maxSpread = 0.2;
+      if (top.spread > maxSpread) {
+        results.push({
+          signal,
+          decision: "SKIPPED",
+          skipReason: "book_too_thin",
+        });
+        continue;
+      }
+
+      // Recompute edge on executable price:
+      // BUY uses ask, SELL uses bid.
+      const executablePrice = signal.side === "BUY" ? top.ask : top.bid;
+      const executableEdge =
+        signal.side === "BUY"
+          ? (signal.forecastProb - executablePrice) * 100
+          : (executablePrice - signal.forecastProb) * 100;
+      if (executableEdge < settings.minEdgePct) {
+        results.push({
+          signal: {
+            ...signal,
+            marketPrice: executablePrice,
+            edgePct: executableEdge,
+          },
+          decision: "SKIPPED",
+          skipReason: "edge_below_threshold",
+        });
+        continue;
+      }
+
+      const pricedSignal = {
+        ...signal,
+        marketPrice: executablePrice,
+        edgePct: executableEdge,
+      };
+
       const { sizeUsd, skipReason } = sizeTrade(
-        signal,
+        pricedSignal,
         settings,
         dailyPnl,
         positions,
@@ -181,7 +261,7 @@ export async function runScanCycle(): Promise<ScanSummary> {
 
       if (sizeUsd <= 0 || skipReason) {
         results.push({
-          signal,
+          signal: pricedSignal,
           decision: "SKIPPED",
           skipReason: skipReason ?? "edge_below_threshold",
         });
@@ -191,12 +271,12 @@ export async function runScanCycle(): Promise<ScanSummary> {
       // Execute trade
       const tradeResult =
         settings.mode === "live"
-          ? await executeLive(signal, sizeUsd)
-          : executePaper(signal, sizeUsd);
+          ? await executeLive(pricedSignal, sizeUsd)
+          : executePaper(pricedSignal, sizeUsd);
 
       if (tradeResult.status === "REJECTED") {
         results.push({
-          signal,
+          signal: pricedSignal,
           decision: "SKIPPED",
           skipReason: "execution_failed",
         });
@@ -210,35 +290,35 @@ export async function runScanCycle(): Promise<ScanSummary> {
           id: tradeResult.id,
           scan_id: scanId,
           city: signal.market.citySlug,
-          bracket_label: signal.bracket.label,
-          target_date: signal.market.targetDate,
-          side: signal.side,
+          bracket_label: pricedSignal.bracket.label,
+          target_date: pricedSignal.market.targetDate,
+          side: pricedSignal.side,
           size_usd: sizeUsd,
           size_shares: tradeResult.sizeShares,
-          price: signal.marketPrice,
+          price: pricedSignal.marketPrice,
           fill_price: tradeResult.fillPrice,
-          edge_pct: signal.edgePct,
-          forecast_prob: signal.forecastProb,
-          market_prob: signal.marketPrice,
+          edge_pct: pricedSignal.edgePct,
+          forecast_prob: pricedSignal.forecastProb,
+          market_prob: pricedSignal.marketPrice,
           mode: settings.mode,
           status: tradeResult.status,
           outcome: "PENDING",
           order_id: tradeResult.orderId ?? "",
-          condition_id: signal.market.conditionId,
-          token_id: signal.bracket.tokenId,
+          condition_id: pricedSignal.market.conditionId,
+          token_id: pricedSignal.bracket.tokenId,
         })
         .select("id")
         .single();
 
       positions.set(
-        signal.bracket.tokenId,
-        (positions.get(signal.bracket.tokenId) ?? 0) + sizeUsd,
+        pricedSignal.bracket.tokenId,
+        (positions.get(pricedSignal.bracket.tokenId) ?? 0) + sizeUsd,
       );
-      tradedMarkets.add(signal.market.conditionId);
-      tradesPerCity.set(signal.market.citySlug, cityCount + 1);
+      tradedMarkets.add(pricedSignal.market.conditionId);
+      tradesPerCity.set(pricedSignal.market.citySlug, cityCount + 1);
 
       results.push({
-        signal,
+        signal: pricedSignal,
         decision: "TRADED",
         tradeSizeUsd: sizeUsd,
         tradeId: tradeRow?.id ?? tradeResult.id,
