@@ -623,11 +623,12 @@ export async function runResolveCycle(limit = 200): Promise<ResolveSummary> {
         continue;
       }
 
-      // Require the target date to be at least 2 days old so the
-      // Open-Meteo archive has confirmed observation data (not forecasts).
+      // Wait at least 12h after the target calendar day starts (UTC) so the
+      // daily high is usually finalized before we read the archive.
+      const minAgeDays = 0.5;
       const targetMs = new Date(t.target_date + "T00:00:00Z").getTime();
       const ageInDays = (Date.now() - targetMs) / 86_400_000;
-      if (ageInDays < 2) {
+      if (ageInDays < minAgeDays) {
         summary.skippedOpen++;
         continue;
       }
