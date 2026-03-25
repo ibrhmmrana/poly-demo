@@ -485,9 +485,12 @@ async function fetchActualHighC(
   lon: number,
   dateStr: string,
 ): Promise<number | null> {
+  // Use the Open-Meteo Historical Archive API for past dates.
+  // The forecast API includes predicted future hours in daily max,
+  // which gives wrong values for recent/today dates.
   try {
     const url =
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}` +
       `&daily=temperature_2m_max&start_date=${dateStr}&end_date=${dateStr}&timezone=auto`;
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
@@ -566,8 +569,6 @@ export async function runResolveCycle(limit = 200): Promise<ResolveSummary> {
   // Cache weather lookups so we don't re-fetch the same city+date.
   const weatherCache = new Map<string, number | null>();
 
-  const todayUTC = new Date().toISOString().slice(0, 10);
-
   for (const t of pending) {
     try {
       if (t.fill_price === null || t.size_shares === null) {
@@ -622,10 +623,11 @@ export async function runResolveCycle(limit = 200): Promise<ResolveSummary> {
         continue;
       }
 
-      // Only resolve dates that are not in the future.
-      // Today's date is allowed because by the time a resolver runs,
-      // the daily high is effectively finalized for paper purposes.
-      if (t.target_date > todayUTC) {
+      // Require the target date to be at least 2 days old so the
+      // Open-Meteo archive has confirmed observation data (not forecasts).
+      const targetMs = new Date(t.target_date + "T00:00:00Z").getTime();
+      const ageInDays = (Date.now() - targetMs) / 86_400_000;
+      if (ageInDays < 2) {
         summary.skippedOpen++;
         continue;
       }
