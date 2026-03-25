@@ -313,9 +313,9 @@ function buildExplanation(r: ScanResultRow): string {
   const reason = (r.skip_reason ?? "").toLowerCase();
   const reasonText: Record<string, string> = {
     edge_below_threshold:
-      "the tradable edge (using executable bid/ask) fell below your minimum edge threshold",
+      "the calculated edge fell below your minimum edge threshold after pricing",
     book_too_thin:
-      "the order book spread/liquidity was too weak to execute with acceptable slippage",
+      "no usable CLOB order book was found for this token (live mode only)",
     top_n_filter:
       "it ranked below the current top-edge cutoff for this scan, so capital was focused on stronger signals",
     scan_trade_cap:

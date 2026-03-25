@@ -52,12 +52,15 @@ export async function executeLive(
     const client = new (ClobClient as unknown as new (h: string, c: number, w: unknown) => Record<string, (...a: unknown[]) => Promise<unknown>>)(host, chainId, wallet);
     await client.createOrDeriveApiKey();
 
-    const price = signal.marketPrice;
-    const sizeShares = sizeUsd / price;
+    // Place a GTC limit order at the Gamma mid-price (signal.marketPrice
+    // has already been set to CLOB mid by the engine).  This provides
+    // liquidity instead of crossing the typically very wide spread.
+    const limitPrice = Math.round(signal.marketPrice * 100) / 100;
+    const sizeShares = sizeUsd / limitPrice;
 
     const order = await client.createAndPostOrder({
       tokenID: signal.bracket.tokenId,
-      price,
+      price: limitPrice,
       size: Math.round(sizeShares * 100) / 100,
       side: signal.side === "BUY" ? "BUY" : "SELL",
     }) as Record<string, unknown> | null;
@@ -72,7 +75,7 @@ export async function executeLive(
 
     return {
       id: tradeId,
-      fillPrice: matched ? Number(order?.matchedPrice ?? price) : price,
+      fillPrice: matched ? Number(order?.matchedPrice ?? limitPrice) : limitPrice,
       sizeShares,
       status: matched ? "FILLED" : "PENDING",
       orderId,

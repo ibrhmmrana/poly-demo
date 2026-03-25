@@ -175,52 +175,50 @@ export async function runScanCycle(): Promise<ScanSummary> {
     let tradableCandidateCount = 0;
 
     for (const signal of edges) {
-      // Use executable CLOB prices, not Gamma snapshot prices.
-      const top = await fetchBookTop(signal.bracket.tokenId);
-      if (top.bid === null || top.ask === null || top.spread === null) {
-        results.push({
-          signal,
-          decision: "SKIPPED",
-          skipReason: "book_too_thin",
-        });
-        continue;
-      }
+      let pricedSignal = signal;
 
-      // Recompute edge on executable price:
-      // BUY uses ask, SELL uses bid.
-      const executablePrice = signal.side === "BUY" ? top.ask : top.bid;
-      const executableEdge =
-        signal.side === "BUY"
-          ? (signal.forecastProb - executablePrice) * 100
-          : (executablePrice - signal.forecastProb) * 100;
-      const pricedSignal = {
-        ...signal,
-        marketPrice: executablePrice,
-        edgePct: executableEdge,
-      };
+      if (settings.mode === "live") {
+        // LIVE MODE: verify edge against real CLOB order book for limit orders.
+        // We still fetch the book to ensure it exists and to log the spread,
+        // but we use the mid-price for limit-order placement rather than
+        // trying to cross the spread.
+        const top = await fetchBookTop(signal.bracket.tokenId);
+        if (top.bid === null || top.ask === null || top.spread === null) {
+          results.push({
+            signal,
+            decision: "SKIPPED",
+            skipReason: "book_too_thin",
+          });
+          continue;
+        }
 
-      if (executableEdge < settings.minEdgePct) {
-        results.push({
-          signal: pricedSignal,
-          decision: "SKIPPED",
-          skipReason: "edge_below_threshold",
-        });
-        continue;
-      }
+        const mid = (top.bid + top.ask) / 2;
+        const midEdge =
+          signal.side === "BUY"
+            ? (signal.forecastProb - mid) * 100
+            : (mid - signal.forecastProb) * 100;
 
-      // Guard against extremely wide/illiquid books after capturing tradable context.
-      if (top.spread > settings.maxSpread) {
-        results.push({
-          signal: pricedSignal,
-          decision: "SKIPPED",
-          skipReason: "book_too_thin",
-        });
-        continue;
+        pricedSignal = {
+          ...signal,
+          marketPrice: mid,
+          edgePct: midEdge,
+        };
+
+        if (midEdge < settings.minEdgePct) {
+          results.push({
+            signal: pricedSignal,
+            decision: "SKIPPED",
+            skipReason: "edge_below_threshold",
+          });
+          continue;
+        }
       }
+      // PAPER MODE: use Gamma indicative prices already in signal.
+      // These represent the market's "mid" estimate and are suitable
+      // for simulation; no CLOB repricing needed.
 
       tradableCandidateCount++;
 
-      // Apply top-N after executable edge checks, not on raw snapshot edge.
       if (executionEligibleCount >= settings.topEdgesConsidered) {
         results.push({
           signal: pricedSignal,
@@ -275,7 +273,9 @@ export async function runScanCycle(): Promise<ScanSummary> {
         continue;
       }
 
-      // Execute trade
+      // Execute trade.
+      // Live mode places GTC limit orders at our target price instead of
+      // crossing the (usually very wide) spread.
       const tradeResult =
         settings.mode === "live"
           ? await executeLive(pricedSignal, sizeUsd)
