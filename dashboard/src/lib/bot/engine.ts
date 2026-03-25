@@ -4,6 +4,7 @@ import { getForecasts } from "./forecast";
 import { findEdges } from "./edge";
 import { sizeTrade } from "./risk";
 import { executePaper, executeLive } from "./trader";
+import { CITIES } from "./cities";
 import type {
   BotSettings,
   ResolveSummary,
@@ -410,6 +411,10 @@ type PendingTradeRow = {
   fill_price: number | null;
   size_shares: number | null;
   outcome: string;
+  city: string | null;
+  bracket_label: string | null;
+  target_date: string | null;
+  mode: string | null;
 };
 
 type GammaMarket = {
@@ -446,12 +451,74 @@ async function fetchGammaMarketByToken(tokenId: string): Promise<GammaMarket | n
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  Weather-based self-resolution for paper trades                     */
+/* ------------------------------------------------------------------ */
+
+async function fetchActualHighC(
+  lat: number,
+  lon: number,
+  dateStr: string,
+): Promise<number | null> {
+  try {
+    const url =
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&daily=temperature_2m_max&start_date=${dateStr}&end_date=${dateStr}&timezone=auto`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      daily?: { temperature_2m_max?: (number | null)[] };
+    };
+    const temps = body?.daily?.temperature_2m_max;
+    if (!Array.isArray(temps) || temps.length === 0 || temps[0] === null)
+      return null;
+    return temps[0];
+  } catch {
+    return null;
+  }
+}
+
+function parseBracketBounds(
+  label: string,
+): { low: number | null; high: number | null } | null {
+  let m: RegExpMatchArray | null;
+
+  m = label.match(/(\d+)\s*°[FC]\s*or\s*higher/i);
+  if (m) return { low: +m[1], high: null };
+
+  m = label.match(/(\d+)\s*°[FC]\s*or\s*(?:below|lower)/i);
+  if (m) return { low: null, high: +m[1] };
+
+  m = label.match(/(\d+)\s*-\s*(\d+)/);
+  if (m) return { low: +m[1], high: +m[2] };
+
+  m = label.match(/^(\d+)\s*°[FC]$/);
+  if (m) return { low: +m[1], high: +m[1] };
+
+  return null;
+}
+
+function isBracketHit(
+  actualTemp: number,
+  bounds: { low: number | null; high: number | null },
+): boolean {
+  if (bounds.low !== null && bounds.high !== null)
+    return actualTemp >= bounds.low && actualTemp <= bounds.high;
+  if (bounds.low !== null) return actualTemp >= bounds.low;
+  if (bounds.high !== null) return actualTemp <= bounds.high;
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+
 export async function runResolveCycle(limit = 200): Promise<ResolveSummary> {
   const sb = getServiceSupabase();
 
   const { data, error } = await sb
     .from("trades")
-    .select("id, token_id, side, fill_price, size_shares, outcome")
+    .select(
+      "id, token_id, side, fill_price, size_shares, outcome, city, bracket_label, target_date, mode",
+    )
     .eq("outcome", "PENDING")
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -471,29 +538,110 @@ export async function runResolveCycle(limit = 200): Promise<ResolveSummary> {
     errors: 0,
   };
 
+  // Cache weather lookups so we don't re-fetch the same city+date.
+  const weatherCache = new Map<string, number | null>();
+
+  const todayUTC = new Date().toISOString().slice(0, 10);
+
   for (const t of pending) {
     try {
-      if (!t.token_id || t.fill_price === null || t.size_shares === null) {
+      if (t.fill_price === null || t.size_shares === null) {
         summary.errors++;
         continue;
       }
 
-      const market = await fetchGammaMarketByToken(t.token_id);
-      if (!market) {
-        summary.errors++;
-        continue;
+      /* --- Path 1: Polymarket official resolution (live trades) --- */
+      if (t.token_id) {
+        const market = await fetchGammaMarketByToken(t.token_id);
+        if (market?.closed) {
+          const prices = parseOutcomePrices(market.outcomePrices);
+          if (!prices) {
+            summary.errors++;
+            continue;
+          }
+          const payoutYes = prices[0];
+          const pnl =
+            t.side === "BUY"
+              ? (payoutYes - t.fill_price) * t.size_shares
+              : (t.fill_price - payoutYes) * t.size_shares;
+          const outcome = pnl >= 0 ? "WIN" : "LOSS";
+
+          const { error: updateErr } = await sb
+            .from("trades")
+            .update({
+              outcome,
+              pnl: Math.round(pnl * 100) / 100,
+              resolved_at: new Date().toISOString(),
+            })
+            .eq("id", t.id);
+
+          if (updateErr) {
+            summary.errors++;
+            continue;
+          }
+          summary.resolved++;
+          if (outcome === "WIN") summary.wins++;
+          else summary.losses++;
+          continue;
+        }
       }
-      if (!market.closed) {
+
+      /* --- Path 2: Self-resolve paper trades via actual weather --- */
+      if (
+        t.mode !== "paper" ||
+        !t.city ||
+        !t.bracket_label ||
+        !t.target_date
+      ) {
         summary.skippedOpen++;
         continue;
       }
 
-      const prices = parseOutcomePrices(market.outcomePrices);
-      if (!prices) {
+      // Only resolve dates that are not in the future.
+      // Today's date is allowed because by the time a resolver runs,
+      // the daily high is effectively finalized for paper purposes.
+      if (t.target_date > todayUTC) {
+        summary.skippedOpen++;
+        continue;
+      }
+
+      const cityInfo = CITIES[t.city];
+      if (!cityInfo) {
         summary.errors++;
         continue;
       }
-      const payoutYes = prices[0];
+
+      const cacheKey = `${t.city}:${t.target_date}`;
+      let actualHighC: number | null;
+      if (weatherCache.has(cacheKey)) {
+        actualHighC = weatherCache.get(cacheKey)!;
+      } else {
+        actualHighC = await fetchActualHighC(
+          cityInfo.lat,
+          cityInfo.lon,
+          t.target_date,
+        );
+        weatherCache.set(cacheKey, actualHighC);
+      }
+
+      if (actualHighC === null) {
+        summary.errors++;
+        continue;
+      }
+
+      const actualHigh =
+        cityInfo.tempUnit === "F"
+          ? Math.round(actualHighC * (9 / 5) + 32)
+          : Math.round(actualHighC);
+
+      const bounds = parseBracketBounds(t.bracket_label);
+      if (!bounds) {
+        summary.errors++;
+        continue;
+      }
+
+      const hit = isBracketHit(actualHigh, bounds);
+      const payoutYes = hit ? 1 : 0;
 
       const pnl =
         t.side === "BUY"
