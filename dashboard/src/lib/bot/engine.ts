@@ -92,19 +92,33 @@ async function getDailyPnl(): Promise<number> {
   );
 }
 
-async function getPositionMap(): Promise<Map<string, number>> {
+interface ExistingPosition {
+  positionByToken: Map<string, number>;
+  tradedTokens: Set<string>;
+  tradedConditions: Set<string>;
+}
+
+async function getExistingPositions(): Promise<ExistingPosition> {
   const sb = getServiceSupabase();
   const { data } = await sb
     .from("trades")
-    .select("token_id, size_usd")
-    .eq("outcome", "PENDING");
-  const map = new Map<string, number>();
+    .select("token_id, condition_id, size_usd, outcome")
+    .in("outcome", ["PENDING", "WIN", "LOSS"]);
+  const positionByToken = new Map<string, number>();
+  const tradedTokens = new Set<string>();
+  const tradedConditions = new Set<string>();
   for (const r of data ?? []) {
     const tid = (r as { token_id: string }).token_id;
+    const cid = (r as { condition_id: string }).condition_id;
     const usd = (r as { size_usd: number }).size_usd ?? 0;
-    map.set(tid, (map.get(tid) ?? 0) + usd);
+    const outcome = (r as { outcome: string }).outcome;
+    if (tid) tradedTokens.add(tid);
+    if (cid) tradedConditions.add(cid);
+    if (outcome === "PENDING") {
+      positionByToken.set(tid, (positionByToken.get(tid) ?? 0) + usd);
+    }
   }
-  return map;
+  return { positionByToken, tradedTokens, tradedConditions };
 }
 
 export async function runScanCycle(): Promise<ScanSummary> {
@@ -166,11 +180,12 @@ export async function runScanCycle(): Promise<ScanSummary> {
 
     // 6. Size & execute each edge
     const dailyPnl = await getDailyPnl();
-    const positions = await getPositionMap();
+    const existing = await getExistingPositions();
+    const positions = existing.positionByToken;
     const results: ScanResult[] = [];
     let tradesPlaced = 0;
     const tradesPerCity = new Map<string, number>();
-    const tradedMarkets = new Set<string>();
+    const tradedMarkets = new Set(existing.tradedConditions);
 
     let executionEligibleCount = 0;
     let tradableCandidateCount = 0;
@@ -249,6 +264,15 @@ export async function runScanCycle(): Promise<ScanSummary> {
         continue;
       }
 
+      if (existing.tradedTokens.has(pricedSignal.bracket.tokenId)) {
+        results.push({
+          signal: pricedSignal,
+          decision: "SKIPPED",
+          skipReason: "market_already_traded",
+        });
+        continue;
+      }
+
       if (tradedMarkets.has(pricedSignal.market.conditionId)) {
         results.push({
           signal: pricedSignal,
@@ -322,6 +346,7 @@ export async function runScanCycle(): Promise<ScanSummary> {
         pricedSignal.bracket.tokenId,
         (positions.get(pricedSignal.bracket.tokenId) ?? 0) + sizeUsd,
       );
+      existing.tradedTokens.add(pricedSignal.bracket.tokenId);
       tradedMarkets.add(pricedSignal.market.conditionId);
       tradesPerCity.set(pricedSignal.market.citySlug, cityCount + 1);
 
