@@ -26,10 +26,34 @@ async function timedFetch(
   return { ok: res.ok, status: res.status, latencyMs, json };
 }
 
+function firstClobTokenId(m: Record<string, unknown>): string {
+  const raw = m.clobTokenIds;
+  try {
+    if (typeof raw === "string") {
+      const parsed = JSON.parse(raw) as string[];
+      return parsed?.[0] ?? "";
+    }
+    if (Array.isArray(raw) && typeof raw[0] === "string") {
+      return raw[0];
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+function isWeatherGammaEvent(ev: Record<string, unknown>): boolean {
+  const title = String(ev.title ?? "").toLowerCase();
+  const slug = String(ev.slug ?? "").toLowerCase();
+  return (
+    title.includes("highest temperature") || slug.includes("highest-temperature")
+  );
+}
+
 async function testGamma(): Promise<TestResult & { tokenId?: string }> {
   try {
     const gamma = await timedFetch(
-      "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=25",
+      "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100",
     );
     if (!gamma.ok || !Array.isArray(gamma.json)) {
       return {
@@ -39,40 +63,60 @@ async function testGamma(): Promise<TestResult & { tokenId?: string }> {
       };
     }
 
-    const weatherEvent = gamma.json.find((event) => {
-      const title = String((event as Record<string, unknown>).title ?? "").toLowerCase();
-      return title.includes("highest temperature");
-    }) as Record<string, unknown> | undefined;
+    const weatherEvent = gamma.json.find((event) =>
+      isWeatherGammaEvent(event as Record<string, unknown>),
+    ) as Record<string, unknown> | undefined;
 
     const markets = Array.isArray(weatherEvent?.markets)
-      ? (weatherEvent?.markets as Array<Record<string, unknown>>)
+      ? (weatherEvent.markets as Array<Record<string, unknown>>)
       : [];
     let tokenId = "";
+    let source: "weather" | "markets_fallback" | "none" = "none";
+
     for (const m of markets) {
-      const raw = m.clobTokenIds;
-      if (typeof raw === "string") {
-        try {
-          const parsed = JSON.parse(raw) as string[];
-          if (parsed?.[0]) {
-            tokenId = parsed[0];
+      tokenId = firstClobTokenId(m);
+      if (tokenId) {
+        source = "weather";
+        break;
+      }
+    }
+
+    if (!tokenId) {
+      const mk = await timedFetch(
+        "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=40",
+      );
+      if (mk.ok && Array.isArray(mk.json)) {
+        for (const row of mk.json as Array<Record<string, unknown>>) {
+          tokenId = firstClobTokenId(row);
+          if (tokenId) {
+            source = "markets_fallback";
             break;
           }
-        } catch {
-          // ignore malformed token array
         }
       }
+    }
+
+    let message = "Gamma API reachable";
+    if (weatherEvent && source === "weather") {
+      message += "; weather market token for CLOB probe";
+    } else if (source === "markets_fallback") {
+      message +=
+        "; no weather token in events sample — using active market for CLOB probe";
+    } else if (weatherEvent) {
+      message += "; weather event found but no clobTokenIds on nested markets";
+    } else {
+      message += "; no weather market in events sample";
     }
 
     return {
       ok: true,
       latencyMs: gamma.latencyMs,
-      message: weatherEvent
-        ? "Gamma API reachable; weather markets found"
-        : "Gamma API reachable; no weather market in sample",
+      message,
       tokenId: tokenId || undefined,
       details: {
         sampledEvents: gamma.json.length,
         weatherEventTitle: weatherEvent?.title ?? null,
+        clobProbeSource: source,
       },
     };
   } catch (error) {
